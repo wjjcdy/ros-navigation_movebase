@@ -103,7 +103,7 @@ namespace dwa_local_planner {
       tf_ = tf;
       costmap_ros_ = costmap_ros;
       costmap_ros_->getRobotPose(current_pose_);
-
+      global_pose_last_ = current_pose_;
       // make sure to update the costmap we'll use for this cycle
       costmap_2d::Costmap2D* costmap = costmap_ros_->getCostmap();
 
@@ -246,8 +246,21 @@ namespace dwa_local_planner {
     return true;
   }
 
-
-
+  void DWAPlannerROS::creatBackPath(const tf::Stamped<tf::Pose>& global_pose,std::vector<geometry_msgs::PoseStamped>& transformed_plan) {
+    transformed_plan.clear();
+    geometry_msgs::PoseStamped newer_pose; 
+    double pos_x = global_pose.getOrigin().getX();
+    double pos_y = global_pose.getOrigin().getY();
+    double yaw = tf::getYaw(global_pose.getRotation())+M_PI;
+    // geometry_msgs::Quaternion orientation = global_pose.getRotation();
+    for(int i =1; i<11;++i) {
+      double l = i * 0.1;
+      newer_pose.pose.position.x = pos_x + l* cos(yaw);
+      newer_pose.pose.position.y = pos_y + l* cos(yaw);
+      // newer_pose.pose.orientation = orientation;
+      transformed_plan.push_back(newer_pose);
+    }
+  }
 
   bool DWAPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel) {
     // dispatches to either dwa sampling control or stop and rotate control, depending on whether we have been close enough to goal
@@ -288,12 +301,52 @@ namespace dwa_local_planner {
           boost::bind(&DWAPlanner::checkTrajectory, dp_, _1, _2, _3));
     } else {
       bool isOk = dwaComputeVelocityCommands(current_pose_, cmd_vel);
-      if (isOk) {
+      
+      if (isOk && !escape_flag_) {              // 正常dwa，且不再脱困模式下
         publishGlobalPlan(transformed_plan);
-      } else {
-        ROS_WARN_NAMED("dwa_local_planner", "DWA planner failed to produce path.");
+        global_pose_last_ = current_pose_;
+        no_path_cnt_ = 0;
+      } else if(!escape_flag_){                 // 停下一刻然后切换为脱困模式
+        no_path_cnt_++;
+        if(no_path_cnt_>3) {
+          no_path_cnt_ = 0;
+          escape_flag_ = true;
+          ROS_WARN_NAMED("dwa_local_planner", "Tring back to escape");
+        } else {
+          ROS_WARN_NAMED("dwa_local_planner", "no local path");
+        }
+
         std::vector<geometry_msgs::PoseStamped> empty_plan;
         publishGlobalPlan(empty_plan);
+        global_pose_last_ = current_pose_;
+      } else {                                  // 采用反方向运动进行脱困
+        // // fresh back path，更新反方向的路径
+        // creatBackPath(current_pose_,transformed_plan);
+        // // update plan in dwa_planner even if we just stop and rotate, to allow checkTrajectory
+        // dp_->updatePlanAndLocalCosts(current_pose_, transformed_plan, costmap_ros_->getRobotFootprint());
+
+        // bool isOk = dwaComputeVelocityCommands(current_pose_, cmd_vel);
+        
+        // 后退10cm自动退出
+        double x_diff = current_pose_.getOrigin().x() - global_pose_last_.getOrigin().x();
+        double y_diff = current_pose_.getOrigin().y() - global_pose_last_.getOrigin().y();
+        double sq_dist = x_diff * x_diff + y_diff * y_diff;
+        if (sq_dist > 0.01) {
+          escape_flag_ = false;
+          cmd_vel.angular.z=0;
+          cmd_vel.linear.x=0;
+        } else {
+          cmd_vel.angular.z=0;
+          cmd_vel.linear.x=-0.1;
+        }
+        // else if(isOK) {
+        //   publishGlobalPlan(transformed_plan);
+        // } else {
+        //   escape_flag_ = false;
+        //   ROS_WARN_NAMED("dwa_local_planner", "DWA planner failed to produce path.");
+        //   std::vector<geometry_msgs::PoseStamped> empty_plan;
+        //   publishGlobalPlan(empty_plan);
+        // }
       }
       return isOk;
     }

@@ -130,6 +130,8 @@ namespace dwa_local_planner {
 
       void publishGlobalPlan(std::vector<geometry_msgs::PoseStamped>& path);
 
+      void creatBackPath(const tf::Stamped<tf::Pose>& global_pose,std::vector<geometry_msgs::PoseStamped>& transformed_plan);
+
       tf::TransformListener* tf_; ///< @brief Used for transforming point clouds
 
       // for visualisation, publishers of global and local plan
@@ -154,6 +156,10 @@ namespace dwa_local_planner {
 
       base_local_planner::OdometryHelperRos odom_helper_;
       std::string odom_topic_;
+
+      bool escape_flag_ = false;
+      tf::Stamped<tf::Pose> global_pose_last_;
+      int no_path_cnt_ = 0;
   };
 };
 #endif
